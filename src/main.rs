@@ -1,17 +1,26 @@
 use bevy::prelude::*;
+use rand::{random, seq::SliceRandom, thread_rng, Rng};
 
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
-        .add_systems(Startup, spawn_player)
         .add_systems(Startup, spawn_cam)
+        .add_systems(Startup, spawn_player)
+        .add_systems(Startup, spawn_enemies)
         .add_systems(Update, handle_movement)
         .add_systems(Update, confine_player)
+        .add_systems(Update, enemy_movement)
+        .add_systems(Update, confine_enemy)
         .run();
 }
 
 #[derive(Component)]
 pub struct Player;
+
+#[derive(Component)]
+pub struct Enemy {
+    direction: Vec3,
+}
 
 pub fn spawn_player(mut commands: Commands, windows: Query<&Window>, assets: Res<AssetServer>) {
     let window = windows.get_single().unwrap();
@@ -24,6 +33,35 @@ pub fn spawn_player(mut commands: Commands, windows: Query<&Window>, assets: Res
         },
         Player {},
     ));
+}
+
+pub fn spawn_enemies(mut commands: Commands, windows: Query<&Window>, assets: Res<AssetServer>) {
+    let window = windows.get_single().unwrap();
+
+    let mut thread_rng = rand::thread_rng();
+
+    for _ in 0..thread_rng.gen_range(3..=5) {
+        commands.spawn((
+            SpriteBundle {
+                transform: Transform::from_xyz(
+                    thread_rng.gen_range(PLAYER_SIZE..window.width() - PLAYER_SIZE),
+                    thread_rng.gen_range(PLAYER_SIZE..window.height() - PLAYER_SIZE),
+                    0.,
+                ),
+                texture: assets.load("img/ball_red_large.png"),
+                ..default()
+            },
+            Enemy {
+                direction: Vec3::new(random(), random(), 0.).normalize(),
+            },
+        ));
+    }
+}
+
+pub fn enemy_movement(mut enemies: Query<(&mut Transform, &Enemy)>, time: Res<Time>) {
+    for (mut transform, enemy) in enemies.iter_mut() {
+        transform.translation += enemy.direction * time.delta_seconds() * PLAYER_SPEED;
+    }
 }
 
 pub fn spawn_cam(mut commands: Commands, windows: Query<&Window>) {
@@ -96,5 +134,50 @@ pub fn confine_player(
 
     if player_transform.translation.y >= window.height() - HALF {
         player_transform.translation.y = window.height() - HALF;
+    }
+}
+
+pub fn confine_enemy(
+    mut commands: Commands,
+    mut enemies: Query<(&Transform, &mut Enemy)>,
+    window: Query<&Window>,
+    assets: Res<AssetServer>,
+) {
+    let window = window.get_single().unwrap();
+
+    const HALF: f32 = PLAYER_SIZE / 2.;
+
+    for (transform, mut enemy) in enemies.iter_mut() {
+        let mut has_bumped = true;
+
+        match (transform.translation.x, transform.translation.y) {
+            (x, _) if x <= HALF || x >= window.width() - HALF => {
+                enemy.direction.x *= -1.;
+            }
+            (_, y) if y <= HALF || y >= window.height() - HALF => {
+                enemy.direction.y *= -1.;
+            }
+            _ => has_bumped = false,
+        }
+
+        if has_bumped {
+            let sounds: [Handle<AudioSource>; 5] = [
+                assets.load("audio/impactMining_000.ogg"),
+                assets.load("audio/impactMining_001.ogg"),
+                assets.load("audio/impactMining_002.ogg"),
+                assets.load("audio/impactMining_003.ogg"),
+                assets.load("audio/impactMining_004.ogg"),
+            ];
+
+            let sound = sounds.choose(&mut thread_rng()).unwrap().clone();
+
+            commands.spawn(AudioBundle {
+                source: sound,
+                settings: PlaybackSettings {
+                    mode: bevy::audio::PlaybackMode::Despawn,
+                    ..default()
+                },
+            });
+        }
     }
 }
