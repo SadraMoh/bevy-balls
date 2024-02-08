@@ -7,15 +7,21 @@ fn main() {
         .add_systems(Startup, spawn_cam)
         .add_systems(Startup, spawn_player)
         .add_systems(Startup, spawn_enemies)
+        .add_systems(Startup, spawn_stars)
         .add_systems(Update, handle_movement)
         .add_systems(Update, confine_player)
         .add_systems(Update, enemy_movement)
         .add_systems(Update, confine_enemy)
+        .add_systems(Update, kill_player)
+        .add_systems(Update, eat_star)
         .run();
 }
 
 #[derive(Component)]
 pub struct Player;
+
+#[derive(Component)]
+pub struct Star;
 
 #[derive(Component)]
 pub struct Enemy {
@@ -35,17 +41,38 @@ pub fn spawn_player(mut commands: Commands, windows: Query<&Window>, assets: Res
     ));
 }
 
+pub fn spawn_stars(mut commands: Commands, windows: Query<&Window>, assets: Res<AssetServer>) {
+    let window = windows.get_single().unwrap();
+
+    let mut thread_rng = rand::thread_rng();
+
+    for _ in 0..thread_rng.gen_range(1..3) {
+        commands.spawn((
+            SpriteBundle {
+                transform: Transform::from_xyz(
+                    thread_rng.gen_range(PLAYER_SIZE..window.width() - PLAYER_SIZE),
+                    thread_rng.gen_range(PLAYER_SIZE..(window.height() - PLAYER_SIZE) / 3.),
+                    0.,
+                ),
+                texture: assets.load("img/star.png"),
+                ..default()
+            },
+            Star {},
+        ));
+    }
+}
+
 pub fn spawn_enemies(mut commands: Commands, windows: Query<&Window>, assets: Res<AssetServer>) {
     let window = windows.get_single().unwrap();
 
     let mut thread_rng = rand::thread_rng();
 
-    for _ in 0..thread_rng.gen_range(3..=5) {
+    for _ in 0..thread_rng.gen_range(1..3) {
         commands.spawn((
             SpriteBundle {
                 transform: Transform::from_xyz(
                     thread_rng.gen_range(PLAYER_SIZE..window.width() - PLAYER_SIZE),
-                    thread_rng.gen_range(PLAYER_SIZE..window.height() - PLAYER_SIZE),
+                    thread_rng.gen_range(PLAYER_SIZE..(window.height() - PLAYER_SIZE) / 3.),
                     0.,
                 ),
                 texture: assets.load("img/ball_red_large.png"),
@@ -139,23 +166,25 @@ pub fn confine_player(
 
 pub fn confine_enemy(
     mut commands: Commands,
-    mut enemies: Query<(&Transform, &mut Enemy)>,
+    mut enemies: Query<(&mut Transform, &mut Enemy)>,
     window: Query<&Window>,
     assets: Res<AssetServer>,
 ) {
     let window = window.get_single().unwrap();
 
-    const HALF: f32 = PLAYER_SIZE / 2.;
+    const HALF: f32 = PLAYER_SIZE / 1.8;
 
-    for (transform, mut enemy) in enemies.iter_mut() {
+    for (mut transform, mut enemy) in enemies.iter_mut() {
         let mut has_bumped = true;
 
         match (transform.translation.x, transform.translation.y) {
-            (x, _) if x <= HALF || x >= window.width() - HALF => {
+            (x, _) if x < HALF || x > window.width() - HALF => {
                 enemy.direction.x *= -1.;
+                transform.translation += enemy.direction * 8.;
             }
-            (_, y) if y <= HALF || y >= window.height() - HALF => {
+            (_, y) if y < HALF || y > window.height() - HALF => {
                 enemy.direction.y *= -1.;
+                transform.translation += enemy.direction * 8.;
             }
             _ => has_bumped = false,
         }
@@ -178,6 +207,78 @@ pub fn confine_enemy(
                     ..default()
                 },
             });
+        }
+    }
+}
+
+pub fn eat_star(
+    mut commands: Commands,
+    stars: Query<(Entity, &Transform), With<Star>>,
+    player_query: Query<&Transform, With<Player>>,
+    assets: Res<AssetServer>,
+) {
+    let Ok(player_transform) = player_query.get_single() else {
+        return;
+    };
+
+    for (star_entity, star_transform) in stars.iter() {
+        if star_transform
+            .translation
+            .distance(player_transform.translation)
+            <= PLAYER_SIZE
+        {
+            let sounds: [Handle<AudioSource>; 2] = [
+                assets.load("audio/pluck_000.ogg"),
+                assets.load("audio/pluck_001.ogg"),
+            ];
+
+            let sound = sounds.choose(&mut thread_rng()).unwrap().clone();
+
+            commands.spawn(AudioBundle {
+                source: sound,
+                settings: PlaybackSettings {
+                    mode: bevy::audio::PlaybackMode::Despawn,
+                    ..default()
+                },
+            });
+
+            commands.entity(star_entity).despawn();
+        }
+    }
+}
+
+pub fn kill_player(
+    mut commands: Commands,
+    enemies: Query<&Transform, With<Enemy>>,
+    player_query: Query<(Entity, &Transform), With<Player>>,
+    assets: Res<AssetServer>,
+) {
+    let Ok((player_entity, player_transform)) = player_query.get_single() else {
+        return;
+    };
+
+    for enemy_transform in enemies.iter() {
+        if enemy_transform
+            .translation
+            .distance(player_transform.translation)
+            <= PLAYER_SIZE
+        {
+            let sounds: [Handle<AudioSource>; 2] = [
+                assets.load("audio/explosionCrunch_000.ogg"),
+                assets.load("audio/explosionCrunch_001.ogg"),
+            ];
+
+            let sound = sounds.choose(&mut thread_rng()).unwrap().clone();
+
+            commands.spawn(AudioBundle {
+                source: sound,
+                settings: PlaybackSettings {
+                    mode: bevy::audio::PlaybackMode::Despawn,
+                    ..default()
+                },
+            });
+
+            commands.entity(player_entity).despawn();
         }
     }
 }
